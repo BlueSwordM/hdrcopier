@@ -283,6 +283,7 @@ pub fn parse_ffprobe(input: &Path) -> Result<Option<HdrMetadata>> {
         .arg("quiet")
         .arg("-show_frames")
         .arg("-read_intervals")
+        .arg("-select_streams v:0")
         .arg("%+#1")
         .arg(input)
         .output()?;

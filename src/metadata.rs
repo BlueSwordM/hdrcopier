@@ -1,28 +1,24 @@
-use std::{path::Path, process::Command};
+use std::{
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 use anyhow::Result;
 
 use crate::{
     parse::{parse_ffprobe, parse_mediainfo, parse_mkvinfo},
     values::{
-        print_color_primaries,
-        print_color_range,
-        print_matrix_coefficients,
-        print_rav1e_color_primaries,
-        print_rav1e_color_range,
-        print_rav1e_matrix_coefficients,
-        print_rav1e_transfer_characteristics,
-        print_transfer_characteristics,
-        print_x265_color_primaries,
-        print_x265_color_range,
-        print_x265_matrix_coefficients,
-        print_x265_transfer_characteristics,
+        color_range_to_mkvedit_prop, print_color_primaries, print_color_range,
+        print_matrix_coefficients, print_rav1e_color_primaries, print_rav1e_color_range,
+        print_rav1e_matrix_coefficients, print_rav1e_transfer_characteristics,
+        print_transfer_characteristics, print_x265_color_primaries, print_x265_color_range,
+        print_x265_matrix_coefficients, print_x265_transfer_characteristics,
     },
 };
 
 #[derive(Default)]
 pub struct Metadata {
-    pub basic: BasicMetadata,
+    pub basic: Option<BasicMetadata>,
     pub hdr: Option<HdrMetadata>,
 }
 
@@ -70,9 +66,31 @@ impl Metadata {
                 eprintln!("Warning: {}", e);
             }
         }
+        if data.basic.is_some()
+            && data.hdr.is_some()
+            && data.hdr.as_ref().unwrap().color_coords.is_some()
+        {
+            return Ok(data);
+        }
+
+        match parse_mediainfo(input) {
+            Ok(info) => {
+                if data.basic.is_none() && info.basic.is_some() {
+                    data.basic = info.basic;
+                }
+                if info.hdr.is_some() {
+                    data.hdr = info.hdr;
+                }
+            }
+            Err(e) => {
+                eprintln!("Error: {}", e);
+                anyhow::bail!("Unable to parse metadata");
+            }
+        }
         if data.hdr.is_some() && data.hdr.as_ref().unwrap().color_coords.is_some() {
             return Ok(data);
         }
+
         match parse_ffprobe(input) {
             Ok(Some(info)) => {
                 data.hdr = Some(info);
@@ -82,25 +100,12 @@ impl Metadata {
                 eprintln!("Warning: {}", e);
             }
         }
-        if data.hdr.is_some() && data.hdr.as_ref().unwrap().color_coords.is_some() {
-            return Ok(data);
-        }
-        match parse_mediainfo(input) {
-            Ok(info) => {
-                if info.hdr.is_some() {
-                    data = info;
-                }
-            }
-            Err(e) => {
-                eprintln!("Error: {}", e);
-                anyhow::bail!("Unable to parse metadata");
-            }
-        }
+
         Ok(data)
     }
 
-    pub fn apply(&self, target: &Path, output: &Path) -> Result<()> {
-        let mut command = self.build_mkvmerge_command(target, output);
+    pub fn apply(&self, target: &Path, chapters: Option<&Path>) -> Result<()> {
+        let mut command = self.build_mkvmerge_command(target, chapters);
         eprintln!("Running: {:?}", command);
         let status = command.status()?;
         if !status.success() {
@@ -120,19 +125,21 @@ impl Metadata {
     }
 
     fn print_human_readable_format(&self) {
-        println!("Color Range: {}", print_color_range(self.basic.range));
-        println!(
-            "Color Primaries: {}",
-            print_color_primaries(self.basic.primaries)
-        );
-        println!(
-            "Transfer Characteristics: {}",
-            print_transfer_characteristics(self.basic.transfer)
-        );
-        println!(
-            "Matrix Coefficients: {}",
-            print_matrix_coefficients(self.basic.matrix)
-        );
+        if let Some(ref basic) = self.basic {
+            println!("Color Range: {}", print_color_range(basic.range));
+            println!(
+                "Color Primaries: {}",
+                print_color_primaries(basic.primaries)
+            );
+            println!(
+                "Transfer Characteristics: {}",
+                print_transfer_characteristics(basic.transfer)
+            );
+            println!(
+                "Matrix Coefficients: {}",
+                print_matrix_coefficients(basic.matrix)
+            );
+        }
         if let Some(ref hdr_data) = self.hdr {
             println!("Max Content Light Level: {}", hdr_data.max_content_light);
             println!(
@@ -164,11 +171,18 @@ impl Metadata {
 
     fn print_x265_args(&self) {
         println!(
-            "--range {} --colorprim {} --transfer {} --colormatrix {}{}",
-            print_x265_color_range(self.basic.range),
-            print_x265_color_primaries(self.basic.primaries),
-            print_x265_transfer_characteristics(self.basic.transfer),
-            print_x265_matrix_coefficients(self.basic.matrix),
+            "{}{}",
+            if let Some(ref basic) = self.basic {
+                format!(
+                    "--range {} --colorprim {} --transfer {} --colormatrix {}",
+                    print_x265_color_range(basic.range),
+                    print_x265_color_primaries(basic.primaries),
+                    print_x265_transfer_characteristics(basic.transfer),
+                    print_x265_matrix_coefficients(basic.matrix)
+                )
+            } else {
+                String::new()
+            },
             if let Some(ref hdr_data) = self.hdr {
                 format!(
                     " --max-luma {} --min-luma {:.4} --max-cll {},{} --master-display {}",
@@ -190,11 +204,18 @@ impl Metadata {
 
     fn print_rav1e_args(&self) {
         println!(
-            "--range {} --primaries {} --transfer {} --matrix {}{}",
-            print_rav1e_color_range(self.basic.range),
-            print_rav1e_color_primaries(self.basic.primaries),
-            print_rav1e_transfer_characteristics(self.basic.transfer),
-            print_rav1e_matrix_coefficients(self.basic.matrix),
+            "{}{}",
+            if let Some(ref basic) = self.basic {
+                format!(
+                    "--range {} --primaries {} --transfer {} --matrix {}",
+                    print_rav1e_color_range(basic.range),
+                    print_rav1e_color_primaries(basic.primaries),
+                    print_rav1e_transfer_characteristics(basic.transfer),
+                    print_rav1e_matrix_coefficients(basic.matrix)
+                )
+            } else {
+                String::new()
+            },
             if let Some(ref hdr_data) = self.hdr {
                 format!(
                     " --content-light {},{}{}",
@@ -216,10 +237,7 @@ impl Metadata {
     // The reason is to reduce code duplication, since we also use mkvmerge
     // for muxing.
     fn print_mkvmerge_args(&self) {
-        let output = format!(
-            "{:?}",
-            self.build_mkvmerge_command(Path::new("NUL"), Path::new("NUL"))
-        );
+        let output = format!("{:?}", self.build_mkvmerge_command(Path::new("NUL"), None));
         println!(
             "{}",
             output
@@ -229,47 +247,76 @@ impl Metadata {
         );
     }
 
-    fn build_mkvmerge_command(&self, target: &Path, output: &Path) -> Command {
-        let mut command = Command::new("mkvmerge");
-        command
-            .arg("-o")
-            .arg(output)
-            .arg("--colour-range")
-            .arg(format!("0:{}", self.basic.range))
-            .arg("--colour-transfer-characteristics")
-            .arg(format!("0:{}", self.basic.transfer))
-            .arg("--colour-primaries")
-            .arg(format!("0:{}", self.basic.primaries))
-            .arg("--colour-matrix-coefficients")
-            .arg(format!("0:{}", self.basic.matrix));
+    fn build_mkvmerge_command(&self, target: &Path, chapters: Option<&Path>) -> Command {
+        let mut command = Command::new("mkvpropedit");
+        command.arg("-e").arg("track:v1");
+        if let Some(ref basic) = self.basic {
+            command
+                .arg("-s")
+                .arg(format!(
+                    "colour-range={}",
+                    color_range_to_mkvedit_prop(basic.range)
+                ))
+                .arg("-s")
+                .arg(format!(
+                    "colour-transfer-characteristics={}",
+                    basic.transfer
+                ))
+                .arg("-s")
+                .arg(format!("colour-primaries={}", basic.primaries))
+                .arg("-s")
+                .arg(format!("colour-matrix-coefficients={}", basic.matrix));
+        }
         if let Some(ref hdr_data) = self.hdr {
             command
-                .arg("--max-content-light")
-                .arg(format!("0:{}", hdr_data.max_content_light))
-                .arg("--max-frame-light")
-                .arg(format!("0:{}", hdr_data.max_frame_light))
-                .arg("--max-luminance")
-                .arg(format!("0:{}", hdr_data.max_luma))
-                .arg("--min-luminance")
-                .arg(format!("0:{:.4}", hdr_data.min_luma));
+                .arg("-s")
+                .arg(format!("max-content-light={}", hdr_data.max_content_light))
+                .arg("-s")
+                .arg(format!("max-frame-light={}", hdr_data.max_frame_light))
+                .arg("-s")
+                .arg(format!("max-luminance={}", hdr_data.max_luma))
+                .arg("-s")
+                .arg(format!("min-luminance={:.4}", hdr_data.min_luma));
             if let Some(ref color_coords) = hdr_data.color_coords {
                 command
-                    .arg("--chromaticity-coordinates")
+                    .arg("-s")
                     .arg(format!(
-                        "0:{:.5},{:.5},{:.5},{:.5},{:.5},{:.5}",
-                        color_coords.red.0,
-                        color_coords.red.1,
-                        color_coords.green.0,
-                        color_coords.green.1,
-                        color_coords.blue.0,
+                        "chromaticity-coordinates-red-x={:.5}",
+                        color_coords.red.0
+                    ))
+                    .arg("-s")
+                    .arg(format!(
+                        "chromaticity-coordinates-red-y={:.5}",
+                        color_coords.red.1
+                    ))
+                    .arg("-s")
+                    .arg(format!(
+                        "chromaticity-coordinates-green-x={:.5}",
+                        color_coords.green.0
+                    ))
+                    .arg("-s")
+                    .arg(format!(
+                        "chromaticity-coordinates-green-y={:.5}",
+                        color_coords.green.1
+                    ))
+                    .arg("-s")
+                    .arg(format!(
+                        "chromaticity-coordinates-blue-x={:.5}",
+                        color_coords.blue.0
+                    ))
+                    .arg("-s")
+                    .arg(format!(
+                        "chromaticity-coordinates-blue-y={:.5}",
                         color_coords.blue.1
                     ))
-                    .arg("--white-colour-coordinates")
-                    .arg(format!(
-                        "0:{:.5},{:.5}",
-                        color_coords.white.0, color_coords.white.1
-                    ));
+                    .arg("-s")
+                    .arg(format!("white-coordinates-x={:.5}", color_coords.white.0))
+                    .arg("-s")
+                    .arg(format!("white-coordinates-y={:.5}", color_coords.white.1));
             }
+        }
+        if let Some(chapters) = chapters {
+            command.arg("-c").arg(chapters);
         }
         command.arg(target);
         command
@@ -290,4 +337,18 @@ fn format_master_display(coords: &ColorCoordinates, max_luma: u32, min_luma: f64
         max_luma * 50000,
         (min_luma * 50000.).round() as u32,
     )
+}
+
+pub fn extract_chapters(input: &Path) -> Option<PathBuf> {
+    let output = input.with_extension("hdrcp_chapters.xml");
+    let result = Command::new("mkvextract")
+        .arg(input)
+        .arg("chapters")
+        .arg(&output)
+        .status();
+    if result.is_ok() {
+        Some(output)
+    } else {
+        None
+    }
 }

@@ -12,9 +12,7 @@ use nom::{
 use crate::{
     metadata::{BasicMetadata, ColorCoordinates, HdrMetadata, Metadata},
     values::{
-        parse_color_primaries,
-        parse_color_range,
-        parse_matrix_coefficients,
+        parse_color_primaries, parse_color_range, parse_matrix_coefficients,
         parse_transfer_characteristics,
     },
 };
@@ -45,23 +43,28 @@ pub fn parse_mkvinfo(input: &Path) -> Result<Metadata> {
     let output = String::from_utf8_lossy(&result.stdout);
 
     let mut basic = BasicMetadata::default();
+    let mut has_basic = false;
     let mut hdr = HdrMetadata::default();
     let mut has_hdr = false;
     for line in output.lines() {
         if line.contains("Colour matrix coefficients:") {
             basic.matrix = line.split_once(": ").unwrap().1.parse()?;
+            has_basic = true;
             continue;
         }
         if line.contains("Colour range:") {
             basic.range = line.split_once(": ").unwrap().1.parse()?;
+            has_basic = true;
             continue;
         }
         if line.contains("Colour transfer:") {
             basic.transfer = line.split_once(": ").unwrap().1.parse()?;
+            has_basic = true;
             continue;
         }
         if line.contains("Colour primaries:") {
             basic.primaries = line.split_once(": ").unwrap().1.parse()?;
+            has_basic = true;
             continue;
         }
 
@@ -130,7 +133,7 @@ pub fn parse_mkvinfo(input: &Path) -> Result<Metadata> {
     }
 
     Ok(Metadata {
-        basic,
+        basic: if has_basic { Some(basic) } else { None },
         hdr: if has_hdr { Some(hdr) } else { None },
     })
 }
@@ -156,23 +159,28 @@ pub fn parse_mediainfo(input: &Path) -> Result<Metadata> {
     let output = String::from_utf8_lossy(&result.stdout);
 
     let mut basic = BasicMetadata::default();
+    let mut has_basic = false;
     let mut hdr = HdrMetadata::default();
     let mut has_hdr = false;
     for line in output.lines() {
         if line.contains("Matrix coefficients") {
             basic.matrix = parse_matrix_coefficients(line.split_once(": ").unwrap().1);
+            has_basic = true;
             continue;
         }
         if line.contains("Color range") {
             basic.range = parse_color_range(line.split_once(": ").unwrap().1);
+            has_basic = true;
             continue;
         }
         if line.contains("Transfer characteristics") {
             basic.transfer = parse_transfer_characteristics(line.split_once(": ").unwrap().1);
+            has_basic = true;
             continue;
         }
         if line.contains("Color primaries") {
             basic.primaries = parse_color_primaries(line.split_once(": ").unwrap().1);
+            has_basic = true;
             continue;
         }
 
@@ -220,7 +228,7 @@ pub fn parse_mediainfo(input: &Path) -> Result<Metadata> {
     }
 
     Ok(Metadata {
-        basic,
+        basic: if has_basic { Some(basic) } else { None },
         hdr: if has_hdr { Some(hdr) } else { None },
     })
 }
@@ -233,7 +241,7 @@ fn parse_x265_settings(input: &str) -> Result<ColorCoordinates> {
     const MASTER_DISPLAY_HEADER: &str = "master-display=";
     let header_pos = input
         .find(MASTER_DISPLAY_HEADER)
-        .ok_or(anyhow::anyhow!("Failed to find master display header"))?;
+        .ok_or_else(|| anyhow::anyhow!("Failed to find master display header"))?;
     let input = &input[(header_pos + MASTER_DISPLAY_HEADER.len())..];
     let (input, (gx, gy)) = preceded(char('G'), get_coordinate_pair)(input).unwrap();
     let (input, (bx, by)) = preceded(char('B'), get_coordinate_pair)(input).unwrap();

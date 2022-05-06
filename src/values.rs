@@ -14,6 +14,15 @@ pub fn print_color_range(value: u8) -> &'static str {
     }
 }
 
+pub fn color_range_to_mkvedit_prop(value: u8) -> u8 {
+    // mkvpropedit uses "2" for "Full" instead of "0" which is what everyone else uses.
+    // "0" to them means "unset"
+    if value == 0 {
+        return 2;
+    }
+    value
+}
+
 pub fn print_x265_color_range(value: u8) -> &'static str {
     match value {
         0 => "full",
@@ -189,14 +198,13 @@ pub fn print_rav1e_transfer_characteristics(value: u8) -> &'static str {
         9 => "Log100",
         10 => "Log100Sqrt10",
         11 => "IEC61966",
-        13 => panic!("IEC61966-2-1 not supported by rav1e"),
+        13 => "SRGB",
         14 => "BT2020_10Bit",
         15 => "BT2020_12Bit",
         16 => "SMPTE2084",
         18 => panic!("ARIB B67 not supported by rav1e"),
         // FIXME: The following are rav1e options with an unknown number value
         // BT1361
-        // SRGB
         // SMPTE428
         // HLG
         _ => panic!("Unrecognized transfer characteristics"),
